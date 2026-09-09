@@ -43,30 +43,12 @@ await subscriber.pSubscribe("analysis:*", (message, channel) => {
 });
 
 io.on("connection", (socket) => {
-  // Track which room and color this socket is associated with for disconnect handling
-  let currentRoomId = null;
-  let currentColor = null;
-
   socket.on("join-room", ({ roomId, color, name }) => {
-    // Store context for disconnect handler
-    currentRoomId = roomId;
-    currentColor = color;
-
     socket.join(roomId);
     const game = getOrCreateGame(roomId);
-    
     if (color === "white" || color === "black") {
-      const isReconnect = game.players[color] && game.players[color].name === name;
-      
-      // Update or create player entry
-      game.players[color] = { socketId: socket.id, name, connected: true };
-      
-      // If this is a reconnect, notify other players
-      if (isReconnect) {
-        io.to(roomId).emit("player-reconnected", { color, name });
-      }
+      game.players[color] = { socketId: socket.id, name };
     }
-    
     socket.emit("game-state", serialize(game));
   });
 
@@ -92,18 +74,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    // Mark player as disconnected but keep the game state
-    // Allow reconnect with same room+color
-    if (currentRoomId && currentColor) {
-      const game = games.get(currentRoomId);
-      if (game && game.players[currentColor] && game.players[currentColor].socketId === socket.id) {
-        game.players[currentColor].connected = false;
-        io.to(currentRoomId).emit("player-disconnected", { 
-          color: currentColor, 
-          name: game.players[currentColor].name 
-        });
-      }
-    }
+    // Left as an exercise: mark player disconnected, allow reconnect with same room+color.
   });
 });
 
@@ -122,8 +93,7 @@ function serialize(game) {
     isCheck: game.chess.isCheck(),
     isCheckmate: game.chess.isCheckmate(),
     isDraw: game.chess.isDraw(),
-    moves: game.moves.map((m) => m.san),
-    players: game.players // Include player connection status
+    moves: game.moves.map((m) => m.san)
   };
 }
 
