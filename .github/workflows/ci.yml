@@ -1,0 +1,46 @@
+# Runs on every push/PR to this repo. Scoped to game-service only — this
+# repo IS the service now (see the main chess-platform repo's CLAUDE.md for
+# the full multi-repo layout). End-to-end testing across all services lives
+# in the main repo only, since it needs every service running together.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test --if-present
+
+      - name: Lint check (syntax)
+        run: node --check src/index.js
+
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder for dependency vulnerability scan
+        run: echo "Wire in Snyk, Trivy, or 'npm audit --audit-level=high' here"
+
+  build-image:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (no push on PRs)
+        run: docker build -t chess-platform/game-service:ci .
