@@ -1,0 +1,23 @@
+name = "game-service"
+main = "src/worker.js"
+compatibility_date = "2026-09-10"
+# No nodejs_compat flag — worker.js/gameRoom.js/gameLogic.js/chess.js use no
+# Node built-ins. Only add it if a future change genuinely needs one.
+
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom"]
+
+[vars]
+# Plain URLs, not secrets — fine to commit. Point these at wherever
+# analysis-service / the game-bot HTTP wrapper are actually reachable
+# (see docs/CLOUDFLARE.md for local vs. deployed values).
+ANALYSIS_ORIGIN = "https://changeme.example.com"
+BOT_ORIGIN = "https://changeme.example.com"
+
+# Set with `wrangler secret put ANALYSIS_SHARED_SECRET` and
+# `wrangler secret put BOT_SHARED_SECRET` — never commit these here.

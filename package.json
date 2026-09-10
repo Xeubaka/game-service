@@ -5,7 +5,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test src/*.test.js"
+    "test": "node --test src/*.test.js",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy"
   },
   "dependencies": {
     "express": "^4.19.2",
@@ -14,5 +16,8 @@
     "chess.js": "^1.0.0-beta.8",
     "@se-oss/stockfish": "^1.0.1",
     "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
   }
 }
