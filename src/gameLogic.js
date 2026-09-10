@@ -9,6 +9,7 @@ export function createGame() {
 }
 
 export function serialize(game) {
+  const last = game.moves[game.moves.length - 1];
   return {
     fen: game.chess.fen(),
     turn: game.chess.turn() === "w" ? "white" : "black",
@@ -16,6 +17,7 @@ export function serialize(game) {
     isCheckmate: game.chess.isCheckmate(),
     isDraw: game.chess.isDraw(),
     moves: game.moves.map((m) => m.san),
+    lastMove: last ? { from: last.from, to: last.to } : null, // for the frontend's last-move highlight
     players: game.players, // Include player connection status
     result: game.result // null while the game is ongoing; { reason, winner, resignedBy } once someone resigns
   };

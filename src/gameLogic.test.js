@@ -122,6 +122,17 @@ test("serialize reports turn, check/checkmate/draw flags, and SAN move list", ()
   assert.equal(state.result, null);
 });
 
+test("serialize reports lastMove as null on a fresh game and the most recent from/to after moves", () => {
+  const game = createGame();
+  assert.equal(serialize(game).lastMove, null);
+
+  applyMove(game, "ROOM1", { from: "e2", to: "e4" });
+  assert.deepEqual(serialize(game).lastMove, { from: "e2", to: "e4" });
+
+  applyMove(game, "ROOM1", { from: "e7", to: "e5" });
+  assert.deepEqual(serialize(game).lastMove, { from: "e7", to: "e5" });
+});
+
 test("serialize surfaces checkmate via chess.js (fool's mate)", () => {
   const game = createGame();
   applyMove(game, "ROOM1", { from: "f2", to: "f3" });
