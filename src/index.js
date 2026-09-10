@@ -5,6 +5,7 @@ import { createClient } from "redis";
 import { Chess } from "chess.js";
 import { getBotMove } from "./bot.js";
 import { saveGame, loadGame } from "./db.js";
+import { createGame, isBotRoom, applyMove as applyMoveCore, serialize } from "./gameLogic.js";
 
 const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const PORT = process.env.PORT || 3002;
@@ -24,17 +25,13 @@ app.get("/health", (_req, res) => res.json({ status: "ok", service: "game-servic
 // falls back to memory-only, same as before this existed.
 const games = new Map(); // roomId -> { chess: Chess, moves: [], players: {white, black} }
 
-// Bot games are single-player scratch sessions (client-generated roomId,
-// never revisited) — skip Postgres for them entirely, not worth the round trip.
-const isBotRoom = (roomId) => roomId.startsWith("bot-");
-
 async function getOrCreateGame(roomId) {
   if (games.has(roomId)) return games.get(roomId);
 
   const saved = isBotRoom(roomId) ? null : await loadGame(roomId);
   const game = saved
     ? { chess: new Chess(saved.fen), moves: saved.moves, players: saved.players, result: saved.result }
-    : { chess: new Chess(), moves: [], players: {}, result: null };
+    : createGame();
 
   games.set(roomId, game);
   return game;
@@ -145,27 +142,14 @@ app.get("/rooms/:id/moves", (req, res) => {
 
 // Shared by the socket "move" handler and the bot's own turn, so both paths
 // get identical validation, broadcast, and the Redis publish analysis-service
-// depends on.
-function applyMove(game, roomId, { from, to, promotion }) {
-  if (game.result) throw new Error("game is already over");
-  const move = game.chess.move({ from, to, promotion: promotion || "q" });
-  if (!move) throw new Error("illegal move");
-
-  game.moves.push({ san: move.san, from, to, fen: game.chess.fen(), ts: Date.now() });
-
-  io.to(roomId).emit("game-state", serialize(game));
-
-  // Fire-and-forget publish. game-service does NOT wait for analysis-service.
-  publisher.publish(
-    `moves:${roomId}`,
-    JSON.stringify({ roomId, fen: game.chess.fen(), moveCount: game.moves.length })
-  );
-
-  // Fire-and-forget write-through. A game-service restart rehydrates from
-  // Postgres via getOrCreateGame instead of losing in-progress games.
-  if (!isBotRoom(roomId)) saveGame(roomId, game).catch((e) => console.error("save game failed", e));
-
-  return move;
+// depends on. The actual logic lives in gameLogic.js (unit-tested there,
+// deps-injected); this is just the wiring to the real io/publisher/saveGame.
+function applyMove(game, roomId, moveArgs) {
+  return applyMoveCore(game, roomId, moveArgs, {
+    emit: (room, event, payload) => io.to(room).emit(event, payload),
+    publish: (channel, message) => publisher.publish(channel, message),
+    saveGame
+  });
 }
 
 function triggerBotMove(game, roomId) {
@@ -177,19 +161,6 @@ function triggerBotMove(game, roomId) {
       applyMove(game, roomId, botMove);
     })
     .catch((err) => console.error("bot move failed", err));
-}
-
-function serialize(game) {
-  return {
-    fen: game.chess.fen(),
-    turn: game.chess.turn() === "w" ? "white" : "black",
-    isCheck: game.chess.isCheck(),
-    isCheckmate: game.chess.isCheckmate(),
-    isDraw: game.chess.isDraw(),
-    moves: game.moves.map((m) => m.san),
-    players: game.players, // Include player connection status
-    result: game.result // null while the game is ongoing; { reason, winner, resignedBy } once someone resigns
-  };
 }
 
 server.listen(PORT, () => console.log(`game-service listening on ${PORT}`));
