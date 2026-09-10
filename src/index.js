@@ -21,7 +21,7 @@ const games = new Map(); // roomId -> { chess: Chess, moves: [], players: {white
 
 function getOrCreateGame(roomId) {
   if (!games.has(roomId)) {
-    games.set(roomId, { chess: new Chess(), moves: [], players: {} });
+    games.set(roomId, { chess: new Chess(), moves: [], players: {}, result: null });
   }
   return games.get(roomId);
 }
@@ -73,6 +73,7 @@ io.on("connection", (socket) => {
   socket.on("move", ({ roomId, from, to, promotion }) => {
     const game = getOrCreateGame(roomId);
     try {
+      if (game.result) throw new Error("game is already over");
       const move = game.chess.move({ from, to, promotion: promotion || "q" });
       if (!move) throw new Error("illegal move");
 
@@ -89,6 +90,20 @@ io.on("connection", (socket) => {
     } catch (err) {
       socket.emit("move-rejected", { reason: err.message, from, to });
     }
+  });
+
+  socket.on("resign", () => {
+    // Only an actual player can resign — a spectator's currentColor is
+    // "spectator", not "white"/"black", so this also guards against a
+    // spectator forging a resignation for a side they aren't playing.
+    if (currentColor !== "white" && currentColor !== "black") return;
+    if (!currentRoomId) return;
+    const game = games.get(currentRoomId);
+    if (!game || game.result) return; // no game yet, or already over
+
+    const winner = currentColor === "white" ? "black" : "white";
+    game.result = { reason: "resignation", winner, resignedBy: currentColor };
+    io.to(currentRoomId).emit("game-state", serialize(game));
   });
 
   socket.on("disconnect", () => {
@@ -123,7 +138,8 @@ function serialize(game) {
     isCheckmate: game.chess.isCheckmate(),
     isDraw: game.chess.isDraw(),
     moves: game.moves.map((m) => m.san),
-    players: game.players // Include player connection status
+    players: game.players, // Include player connection status
+    result: game.result // null while the game is ongoing; { reason, winner, resignedBy } once someone resigns
   };
 }
 
