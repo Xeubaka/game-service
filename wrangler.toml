@@ -1,23 +1,22 @@
 name = "game-service"
 main = "src/worker.js"
 compatibility_date = "2026-09-10"
-# No nodejs_compat flag — worker.js/gameRoom.js/gameLogic.js/chess.js use no
-# Node built-ins. Only add it if a future change genuinely needs one.
+# No nodejs_compat flag — worker.js/gameLogic.js/chess.js use no Node
+# built-ins. Only add it if a future change genuinely needs one.
 
-[[durable_objects.bindings]]
-name = "GAME_ROOM"
-class_name = "GameRoom"
-
-[[migrations]]
-tag = "v1"
-new_classes = ["GameRoom"]
+# No Durable Object binding — see docs/CLOUDFLARE.md "Free-tier
+# alternative". Room state lives in Upstash Redis (free tier, plain HTTP)
+# instead of DO storage, which is what makes this Worker deployable on
+# Cloudflare's free Workers plan.
 
 [vars]
 # Plain URLs, not secrets — fine to commit. Point these at wherever
-# analysis-service / the game-bot HTTP wrapper are actually reachable
-# (see docs/CLOUDFLARE.md for local vs. deployed values).
+# analysis-service / the game-bot HTTP wrapper / Upstash are actually
+# reachable (see docs/CLOUDFLARE.md for local vs. deployed values).
 ANALYSIS_ORIGIN = "https://changeme.example.com"
 BOT_ORIGIN = "https://changeme.example.com"
+UPSTASH_REDIS_REST_URL = "https://changeme.upstash.io"
 
-# Set with `wrangler secret put ANALYSIS_SHARED_SECRET` and
-# `wrangler secret put BOT_SHARED_SECRET` — never commit these here.
+# Set with `wrangler secret put ANALYSIS_SHARED_SECRET`,
+# `wrangler secret put BOT_SHARED_SECRET`, and
+# `wrangler secret put UPSTASH_REDIS_REST_TOKEN` — never commit these here.
