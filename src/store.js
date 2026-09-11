@@ -21,3 +21,14 @@ export async function getRaw(env, key) {
 export async function setRaw(env, key, value) {
   await upstash(env, "SET", key, JSON.stringify(value));
 }
+
+// ponytail: fixed window via INCR+EXPIRE, not a sliding window — a client
+// can burst up to 2x limit right at a window boundary. Fine against a
+// flood; revisit with a sorted-set sliding window only if that boundary
+// burst is actually exploited. See docs/CLOUDFLARE.md "Rate limiting".
+export async function rateLimitHit(env, ip, limit = 60, windowSeconds = 10) {
+  const key = `rl:${ip}`;
+  const count = await upstash(env, "INCR", key);
+  if (count.result === 1) await upstash(env, "EXPIRE", key, windowSeconds);
+  return count.result > limit;
+}

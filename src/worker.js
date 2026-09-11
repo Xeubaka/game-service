@@ -1,6 +1,6 @@
 import { Chess } from "chess.js";
 import { createGame, applyMove as applyMoveCore, serialize } from "./gameLogic.js";
-import { getRaw, setRaw } from "./store.js";
+import { getRaw, setRaw, rateLimitHit } from "./store.js";
 
 // Free-tier stand-in for the GameRoom Durable Object (removed — see git
 // history and docs/CLOUDFLARE.md "Free-tier alternative"). A plain Worker
@@ -189,6 +189,14 @@ export default {
 
     if (url.pathname === "/health") {
       return Response.json({ status: "ok", service: "game-service" });
+    }
+
+    // Defense-in-depth behind the Cloudflare dashboard rate limiting rule
+    // (docs/CLOUDFLARE.md "Rate limiting") — that rule only attaches to a
+    // custom domain, so this also covers the bare *.workers.dev URL.
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    if (await rateLimitHit(env, ip)) {
+      return new Response("rate limited", { status: 429 });
     }
 
     // /?room=X&color=Y&name=Z — color/name must be known up front since
