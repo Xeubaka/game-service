@@ -54,3 +54,15 @@ export async function loadGame(roomId) {
   );
   return rows[0] || null;
 }
+
+// Backs the admin page's game history list (chess-plataform#3) — most
+// recently updated first, capped at 100 rather than paginated (a
+// teaching-scope local admin view, not a production audit log).
+export async function listGames() {
+  if (!pool) return [];
+  await ensureSchema();
+  const { rows } = await pool.query(
+    `SELECT room_id, fen, moves, players, result, updated_at FROM games ORDER BY updated_at DESC LIMIT 100`
+  );
+  return rows;
+}

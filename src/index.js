@@ -4,7 +4,7 @@ import { Server } from "socket.io";
 import { createClient } from "redis";
 import { Chess } from "chess.js";
 import { getBotMove } from "./bot.js";
-import { saveGame, loadGame } from "./db.js";
+import { saveGame, loadGame, listGames } from "./db.js";
 import {
   createGame,
   isBotRoom,
@@ -17,7 +17,8 @@ import {
   requestRematch,
   canRespondToRematch,
   resetGameForRematch,
-  REMATCH_WINDOW_MS
+  REMATCH_WINDOW_MS,
+  summarizeGameForAdmin
 } from "./gameLogic.js";
 
 const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
@@ -301,6 +302,16 @@ app.get("/rooms/:id/moves", (req, res) => {
   const game = games.get(req.params.id);
   if (!game) return res.status(404).json({ error: "no such game" });
   res.json({ moves: game.moves, fen: game.chess.fen() });
+});
+
+// Admin page (chess-plataform#3) — game history from Postgres, most
+// recently updated first. No auth, per the item's own framing (explicitly
+// fine for this app's local-only use case). Empty array if GAME_DB_URL
+// isn't set (db.js's no-op fallback), same as everywhere else persistence
+// is optional in this service.
+app.get("/admin/games", async (_req, res) => {
+  const rows = await listGames();
+  res.json(rows.map(summarizeGameForAdmin));
 });
 
 // Shared by the socket "move" handler and the bot's own turn, so both paths

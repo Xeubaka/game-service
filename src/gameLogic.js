@@ -187,3 +187,37 @@ export function applyMove(game, roomId, { from, to, promotion }, deps = {}, now 
 
   return move;
 }
+
+// Turns a raw `games` table row (db.js's listGames) into the admin page's
+// (chess-plataform#3) summary shape. A row's `result` column only ever
+// covers resignation/flagfall (db.js's saveGame persists whatever
+// game.result is, same as everywhere else in this file) — checkmate/draw
+// have to be re-derived from the stored FEN, the same way serialize() does
+// for a live game.
+export function summarizeGameForAdmin(row) {
+  const chess = new Chess(row.fen);
+  const moveCount = Array.isArray(row.moves) ? row.moves.length : 0;
+
+  let outcome = "ongoing";
+  if (row.result) {
+    outcome =
+      row.result.reason === "resignation"
+        ? `${row.result.resignedBy} resigned — ${row.result.winner} won`
+        : row.result.reason === "flagfall"
+        ? `${row.result.loser} ran out of time — ${row.result.winner} won`
+        : `${row.result.reason} — ${row.result.winner} won`;
+  } else if (chess.isCheckmate()) {
+    outcome = `checkmate — ${chess.turn() === "w" ? "black" : "white"} won`;
+  } else if (chess.isDraw()) {
+    outcome = "draw";
+  }
+
+  return {
+    roomId: row.room_id,
+    status: outcome === "ongoing" ? "ongoing" : "ended",
+    outcome,
+    moveCount,
+    players: row.players,
+    updatedAt: row.updated_at
+  };
+}

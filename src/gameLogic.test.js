@@ -12,7 +12,8 @@ import {
   requestRematch,
   canRespondToRematch,
   resetGameForRematch,
-  REMATCH_WINDOW_MS
+  REMATCH_WINDOW_MS,
+  summarizeGameForAdmin
 } from "./gameLogic.js";
 
 test("createGame starts at the standard position with no moves/result", () => {
@@ -316,4 +317,58 @@ test("serialize exposes the pending rematch offer, and null when there isn't one
 
   const rematch = requestRematch(game, "black", 2000);
   assert.deepEqual(serialize(game).rematch, rematch);
+});
+
+// --- Admin page game history (chess-plataform#3) ---
+
+function adminRow(overrides) {
+  return {
+    room_id: "ROOMX",
+    fen: createGame().chess.fen(),
+    moves: [],
+    players: { white: { name: "Alice" }, black: { name: "Bob" } },
+    result: null,
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides
+  };
+}
+
+test("summarizeGameForAdmin reports an ongoing game with no result column", () => {
+  const summary = summarizeGameForAdmin(adminRow({ room_id: "ROOM1" }));
+  assert.equal(summary.roomId, "ROOM1");
+  assert.equal(summary.status, "ongoing");
+  assert.equal(summary.outcome, "ongoing");
+  assert.equal(summary.moveCount, 0);
+  assert.deepEqual(summary.players, { white: { name: "Alice" }, black: { name: "Bob" } });
+});
+
+test("summarizeGameForAdmin renders resignation and flagfall results from the result column", () => {
+  const resigned = summarizeGameForAdmin(
+    adminRow({ result: { reason: "resignation", winner: "black", resignedBy: "white" } })
+  );
+  assert.equal(resigned.status, "ended");
+  assert.equal(resigned.outcome, "white resigned — black won");
+
+  const flagged = summarizeGameForAdmin(adminRow({ result: { reason: "flagfall", winner: "black", loser: "white" } }));
+  assert.equal(flagged.status, "ended");
+  assert.equal(flagged.outcome, "white ran out of time — black won");
+});
+
+test("summarizeGameForAdmin derives checkmate from the stored FEN when the result column is null", () => {
+  const game = createGame();
+  applyMove(game, "ROOM1", { from: "f2", to: "f3" });
+  applyMove(game, "ROOM1", { from: "e7", to: "e5" });
+  applyMove(game, "ROOM1", { from: "g2", to: "g4" });
+  applyMove(game, "ROOM1", { from: "d8", to: "h4" }); // fool's mate
+
+  const summary = summarizeGameForAdmin(adminRow({ fen: game.chess.fen(), moves: game.moves.map((m) => m.san) }));
+  assert.equal(summary.status, "ended");
+  assert.equal(summary.outcome, "checkmate — black won");
+  assert.equal(summary.moveCount, 4);
+});
+
+test("summarizeGameForAdmin derives a draw from the stored FEN (insufficient material) when the result column is null", () => {
+  const summary = summarizeGameForAdmin(adminRow({ fen: "8/8/8/4k3/8/8/8/4K3 w - - 0 1" }));
+  assert.equal(summary.status, "ended");
+  assert.equal(summary.outcome, "draw");
 });
