@@ -5,10 +5,35 @@ import { createClient } from "redis";
 import { Chess } from "chess.js";
 import { getBotMove } from "./bot.js";
 import { saveGame, loadGame } from "./db.js";
-import { createGame, isBotRoom, applyMove as applyMoveCore, serialize, tickClock, STARTING_CLOCK_MS, normalizeStartingClockMs } from "./gameLogic.js";
+import {
+  createGame,
+  isBotRoom,
+  applyMove as applyMoveCore,
+  serialize,
+  tickClock,
+  STARTING_CLOCK_MS,
+  normalizeStartingClockMs,
+  canRequestRematch,
+  requestRematch,
+  canRespondToRematch,
+  resetGameForRematch,
+  REMATCH_WINDOW_MS
+} from "./gameLogic.js";
 
 const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
+const ROOM_SERVICE_URL = process.env.ROOM_SERVICE_URL || "http://room-service:3001";
 const PORT = process.env.PORT || 3002;
+
+// Fire-and-forget: a declined/expired rematch finalizes the room in
+// room-service so a stale room code from a finished match can't be rejoined.
+// Bot games never touch room-service at all (no room-service room exists for
+// them), same as the rest of the bot-room skip conventions in this file.
+function closeRoom(roomId) {
+  if (isBotRoom(roomId)) return;
+  fetch(`${ROOM_SERVICE_URL}/rooms/${roomId}/close`, { method: "POST" }).catch((e) =>
+    console.error("closing room after rematch failed", e)
+  );
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -65,6 +90,25 @@ function scheduleFlagTimer(game, roomId) {
   );
 }
 
+// Rematch accept-window timer: mirrors flagTimers below — one timer per
+// room, cleared/rescheduled around the request/response events.
+const rematchTimers = new Map(); // roomId -> Timeout
+
+function clearRematchTimer(roomId) {
+  clearTimeout(rematchTimers.get(roomId));
+  rematchTimers.delete(roomId);
+}
+
+// If the opponent never responds in time, the offer expires the same way an
+// explicit decline does: clear it and finalize the room.
+function resolveRematchExpiry(game, roomId) {
+  rematchTimers.delete(roomId);
+  if (!game.rematch) return; // already resolved (accepted/declined) before this fired
+  game.rematch = null;
+  io.to(roomId).emit("rematch-closed", { reason: "expired" });
+  closeRoom(roomId);
+}
+
 async function getOrCreateGame(roomId) {
   if (games.has(roomId)) return games.get(roomId);
 
@@ -80,8 +124,10 @@ async function getOrCreateGame(roomId) {
         // losing the room entirely. Add a clocks column if exact
         // restart-safe time matters later.
         clocks: { white: STARTING_CLOCK_MS, black: STARTING_CLOCK_MS },
+        baseClockMs: STARTING_CLOCK_MS,
         turnStartedAt: null,
-        clockStarted: false
+        clockStarted: false,
+        rematch: null
       }
     : createGame();
 
@@ -147,6 +193,7 @@ io.on("connection", (socket) => {
     if (!game.clockStarted && typeof timeControlMs !== "undefined") {
       const clamped = normalizeStartingClockMs(timeControlMs);
       game.clocks = { white: clamped, black: clamped };
+      game.baseClockMs = clamped; // remembered for a rematch's reset, see resetGameForRematch
     }
 
     // Chess clock starts once both seats are actually filled (or immediately
@@ -199,6 +246,37 @@ io.on("connection", (socket) => {
     clearFlagTimer(currentRoomId);
     io.to(currentRoomId).emit("game-state", serialize(game));
     if (!isBotRoom(currentRoomId)) saveGame(currentRoomId, game).catch((e) => console.error("save game failed", e));
+  });
+
+  socket.on("rematch-request", () => {
+    if (!currentRoomId) return;
+    const game = games.get(currentRoomId);
+    if (!game || !canRequestRematch(game, currentRoomId, currentColor)) return;
+
+    const rematch = requestRematch(game, currentColor);
+    io.to(currentRoomId).emit("rematch-offered", rematch);
+    clearRematchTimer(currentRoomId);
+    rematchTimers.set(
+      currentRoomId,
+      setTimeout(() => resolveRematchExpiry(game, currentRoomId), REMATCH_WINDOW_MS)
+    );
+  });
+
+  socket.on("rematch-response", ({ accept }) => {
+    if (!currentRoomId) return;
+    const game = games.get(currentRoomId);
+    if (!game || !canRespondToRematch(game, currentColor)) return;
+
+    clearRematchTimer(currentRoomId);
+    if (accept) {
+      resetGameForRematch(game);
+      io.to(currentRoomId).emit("game-state", serialize(game));
+      scheduleFlagTimer(game, currentRoomId);
+    } else {
+      game.rematch = null;
+      io.to(currentRoomId).emit("rematch-closed", { reason: "declined" });
+      closeRoom(currentRoomId);
+    }
   });
 
   socket.on("disconnect", () => {

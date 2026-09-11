@@ -1,6 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createGame, serialize, applyMove, isBotRoom, tickClock, STARTING_CLOCK_MS, normalizeStartingClockMs } from "./gameLogic.js";
+import {
+  createGame,
+  serialize,
+  applyMove,
+  isBotRoom,
+  tickClock,
+  STARTING_CLOCK_MS,
+  normalizeStartingClockMs,
+  canRequestRematch,
+  requestRematch,
+  canRespondToRematch,
+  resetGameForRematch,
+  REMATCH_WINDOW_MS
+} from "./gameLogic.js";
 
 test("createGame starts at the standard position with no moves/result", () => {
   const game = createGame();
@@ -232,4 +245,75 @@ test("serialize surfaces checkmate via chess.js (fool's mate)", () => {
   const state = serialize(game);
   assert.equal(state.isCheckmate, true);
   assert.equal(state.turn, "white");
+});
+
+// --- Rematch (game-service#3/room-service#3/frontend#2) ---
+
+function finishedTwoPlayerGame() {
+  const game = createGame();
+  game.players = { white: { name: "Alice" }, black: { name: "Bob" } };
+  game.result = { reason: "resignation", winner: "black", resignedBy: "white" };
+  return game;
+}
+
+test("canRequestRematch requires a finished 2-player game, the opponent present, and no pending offer", () => {
+  const game = finishedTwoPlayerGame();
+  assert.equal(canRequestRematch(game, "ROOM1", "white"), true);
+  assert.equal(canRequestRematch(game, "ROOM1", "black"), true);
+
+  assert.equal(canRequestRematch(game, "ROOM1", "spectator"), false);
+  assert.equal(canRequestRematch(game, "bot-xyz", "white"), false); // no second human to accept
+
+  const ongoing = createGame();
+  ongoing.players = { white: {}, black: {} };
+  assert.equal(canRequestRematch(ongoing, "ROOM1", "white"), false); // game not over
+
+  const opponentGone = finishedTwoPlayerGame();
+  delete opponentGone.players.black;
+  assert.equal(canRequestRematch(opponentGone, "ROOM1", "white"), false);
+
+  const alreadyPending = finishedTwoPlayerGame();
+  requestRematch(alreadyPending, "white");
+  assert.equal(canRequestRematch(alreadyPending, "ROOM1", "black"), false);
+});
+
+test("requestRematch records who asked and a 30s expiry", () => {
+  const game = finishedTwoPlayerGame();
+  const rematch = requestRematch(game, "white", 1000);
+  assert.deepEqual(rematch, { requestedBy: "white", expiresAt: 1000 + REMATCH_WINDOW_MS });
+  assert.deepEqual(game.rematch, rematch);
+});
+
+test("canRespondToRematch only allows the non-requesting player to answer", () => {
+  const game = finishedTwoPlayerGame();
+  assert.equal(canRespondToRematch(game, "white"), false); // no pending offer yet
+
+  requestRematch(game, "white");
+  assert.equal(canRespondToRematch(game, "black"), true);
+  assert.equal(canRespondToRematch(game, "white"), false); // can't accept your own offer
+  assert.equal(canRespondToRematch(game, "spectator"), false);
+});
+
+test("resetGameForRematch starts a fresh game at the same time control and clears the offer", () => {
+  const game = finishedTwoPlayerGame();
+  game.baseClockMs = 10 * 60 * 1000; // this room's configured time control
+  game.moves = [{ san: "e4", from: "e2", to: "e4", fen: game.chess.fen(), ts: 0 }]; // pretend the finished game had moves
+  requestRematch(game, "white");
+
+  resetGameForRematch(game, 5000);
+
+  assert.equal(game.chess.fen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  assert.deepEqual(game.moves, []);
+  assert.equal(game.result, null);
+  assert.equal(game.rematch, null);
+  assert.deepEqual(game.clocks, { white: 10 * 60 * 1000, black: 10 * 60 * 1000 });
+  assert.equal(game.turnStartedAt, 5000);
+});
+
+test("serialize exposes the pending rematch offer, and null when there isn't one", () => {
+  const game = finishedTwoPlayerGame();
+  assert.equal(serialize(game).rematch, null);
+
+  const rematch = requestRematch(game, "black", 2000);
+  assert.deepEqual(serialize(game).rematch, rematch);
 });

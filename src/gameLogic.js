@@ -29,13 +29,60 @@ export function createGame() {
     players: {},
     result: null,
     clocks: { white: STARTING_CLOCK_MS, black: STARTING_CLOCK_MS },
+    // The room's own per-side duration (default or room-configurable, see
+    // normalizeStartingClockMs) — remembered so a rematch (resetGameForRematch)
+    // restarts with the same time control instead of always the 3-min default.
+    baseClockMs: STARTING_CLOCK_MS,
     // Clock only starts once both seats are actually filled (index.js sets
     // clockStarted/turnStartedAt at that point) — a lone first player
     // waiting for an opponent shouldn't burn their own clock. Bot games
     // never start it (see applyMove/scheduleFlagTimer's isBotRoom guards).
     turnStartedAt: null,
-    clockStarted: false
+    clockStarted: false,
+    // Pending rematch offer: { requestedBy: "white"|"black", expiresAt } or
+    // null. See canRequestRematch/requestRematch/canRespondToRematch/
+    // resetGameForRematch below.
+    rematch: null
   };
+}
+
+// 30s accept window per docs/SCOPE.md's suggested default for this item.
+export const REMATCH_WINDOW_MS = 30 * 1000;
+
+// Bot games have no second human to accept a rematch (that's the separate,
+// simpler "Play again" button item) — only a real 2-player, finished game
+// with the opponent still present and no rematch already pending is eligible.
+export function canRequestRematch(game, roomId, color) {
+  if (isBotRoom(roomId)) return false;
+  if (color !== "white" && color !== "black") return false;
+  if (!(game.result || game.chess.isGameOver())) return false;
+  const opponentColor = color === "white" ? "black" : "white";
+  if (!game.players[opponentColor]) return false;
+  if (game.rematch) return false;
+  return true;
+}
+
+export function requestRematch(game, color, now = Date.now()) {
+  game.rematch = { requestedBy: color, expiresAt: now + REMATCH_WINDOW_MS };
+  return game.rematch;
+}
+
+// Only the side that didn't propose the rematch can accept/decline it.
+export function canRespondToRematch(game, color) {
+  return Boolean(game.rematch) && (color === "white" || color === "black") && color !== game.rematch.requestedBy;
+}
+
+// Resets an already-over game back to a fresh starting position for a new
+// game in the same room, once a rematch is accepted. Same time control as
+// before (game.baseClockMs); clockStarted is left as-is (already true, since
+// a rematch is only possible once both seats were already filled).
+export function resetGameForRematch(game, now = Date.now()) {
+  game.chess = new Chess();
+  game.moves = [];
+  game.result = null;
+  game.rematch = null;
+  game.clocks = { white: game.baseClockMs, black: game.baseClockMs };
+  game.turnStartedAt = now;
 }
 
 // Applies elapsed time (since turnStartedAt) to the side that just moved.
@@ -74,7 +121,9 @@ export function serialize(game) {
     // move between these resync points instead of the server ticking every
     // second, per docs/SCOPE.md's explicit design call on this item.
     clocks: game.clockStarted ? game.clocks : null,
-    turnStartedAt: game.clockStarted ? game.turnStartedAt : null
+    turnStartedAt: game.clockStarted ? game.turnStartedAt : null,
+    // { requestedBy, expiresAt } while a rematch offer is pending, else null.
+    rematch: game.rematch
   };
 }
 
