@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createGame, serialize, applyMove, isBotRoom, tickClock, STARTING_CLOCK_MS } from "./gameLogic.js";
+import { createGame, serialize, applyMove, isBotRoom, tickClock, STARTING_CLOCK_MS, normalizeStartingClockMs } from "./gameLogic.js";
 
 test("createGame starts at the standard position with no moves/result", () => {
   const game = createGame();
@@ -10,6 +10,17 @@ test("createGame starts at the standard position with no moves/result", () => {
   assert.equal(game.result, null);
   assert.deepEqual(game.clocks, { white: STARTING_CLOCK_MS, black: STARTING_CLOCK_MS });
   assert.equal(game.clockStarted, false);
+});
+
+test("normalizeStartingClockMs clamps to [1min, 60min] and defaults invalid input to the 3-minute standard", () => {
+  assert.equal(normalizeStartingClockMs(5 * 60 * 1000), 5 * 60 * 1000);
+  assert.equal(normalizeStartingClockMs(30 * 1000), 60 * 1000); // below 1 min floor
+  assert.equal(normalizeStartingClockMs(120 * 60 * 1000), 60 * 60 * 1000); // above 60 min ceiling
+  assert.equal(normalizeStartingClockMs(0), STARTING_CLOCK_MS);
+  assert.equal(normalizeStartingClockMs(-1000), STARTING_CLOCK_MS);
+  assert.equal(normalizeStartingClockMs(NaN), STARTING_CLOCK_MS);
+  assert.equal(normalizeStartingClockMs(undefined), STARTING_CLOCK_MS);
+  assert.equal(normalizeStartingClockMs("not a number"), STARTING_CLOCK_MS);
 });
 
 test("tickClock decrements the moving side's clock by elapsed time", () => {

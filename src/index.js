@@ -5,7 +5,7 @@ import { createClient } from "redis";
 import { Chess } from "chess.js";
 import { getBotMove } from "./bot.js";
 import { saveGame, loadGame } from "./db.js";
-import { createGame, isBotRoom, applyMove as applyMoveCore, serialize, tickClock, STARTING_CLOCK_MS } from "./gameLogic.js";
+import { createGame, isBotRoom, applyMove as applyMoveCore, serialize, tickClock, STARTING_CLOCK_MS, normalizeStartingClockMs } from "./gameLogic.js";
 
 const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const PORT = process.env.PORT || 3002;
@@ -110,7 +110,7 @@ io.on("connection", (socket) => {
   let currentRoomId = null;
   let currentColor = null;
 
-  socket.on("join-room", async ({ roomId, color, name, vsBot, difficulty }) => {
+  socket.on("join-room", async ({ roomId, color, name, vsBot, difficulty, timeControlMs }) => {
     // Store context for disconnect handler
     currentRoomId = roomId;
     currentColor = color;
@@ -137,6 +137,16 @@ io.on("connection", (socket) => {
       if (isReconnect) {
         io.to(roomId).emit("player-reconnected", { color, name });
       }
+    }
+
+    // Room-configurable time control: applied from whichever join sends a
+    // valid value, as long as the clock hasn't started yet — both the
+    // creator and the joiner read the same room.timeControlMs from
+    // room-service, so this is idempotent between them. Guarded by
+    // clockStarted so a later reconnect can't reset an in-progress clock.
+    if (!game.clockStarted && typeof timeControlMs !== "undefined") {
+      const clamped = normalizeStartingClockMs(timeControlMs);
+      game.clocks = { white: clamped, black: clamped };
     }
 
     // Chess clock starts once both seats are actually filled (or immediately

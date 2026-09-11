@@ -7,6 +7,20 @@ export const isBotRoom = (roomId) => roomId.startsWith("bot-");
 export const STARTING_CLOCK_MS = 3 * 60 * 1000;
 const LOW_TIME_THRESHOLD_MS = 5000;
 const LOW_TIME_BONUS_MS = 5000;
+// Bounds for a room-configurable time control (room-service#2/game-service#2)
+// — matches room-service's own 1-60 minute clamp on the host's chosen value.
+const MIN_STARTING_CLOCK_MS = 60 * 1000;
+const MAX_STARTING_CLOCK_MS = 60 * 60 * 1000;
+
+// game-service trusts the client-supplied join-room payload the same way it
+// already trusts color/vsBot/difficulty (no auth anywhere in this app), but
+// still clamps a wildly invalid duration (0, negative, NaN) rather than
+// letting it produce an instant or unbounded flag-fall.
+export function normalizeStartingClockMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return STARTING_CLOCK_MS;
+  return Math.min(MAX_STARTING_CLOCK_MS, Math.max(MIN_STARTING_CLOCK_MS, n));
+}
 
 export function createGame() {
   return {
