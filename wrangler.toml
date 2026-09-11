@@ -1,4 +1,4 @@
-name = "game-service"
+name = "chess-plataform"
 main = "src/worker.js"
 compatibility_date = "2026-09-10"
 # No nodejs_compat flag — worker.js/gameLogic.js/chess.js use no Node
@@ -15,7 +15,8 @@ compatibility_date = "2026-09-10"
 # reachable (see docs/CLOUDFLARE.md for local vs. deployed values).
 ANALYSIS_ORIGIN = "https://changeme.example.com"
 BOT_ORIGIN = "https://changeme.example.com"
-UPSTASH_REDIS_REST_URL = "https://changeme.upstash.io"
+UPSTASH_REDIS_REST_URL = "https://vocal-skink-174692.upstash.io"
+
 
 # Set with `wrangler secret put ANALYSIS_SHARED_SECRET`,
 # `wrangler secret put BOT_SHARED_SECRET`, and
