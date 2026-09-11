@@ -4,8 +4,43 @@ import { Chess } from "chess.js";
 // never revisited) — skip Postgres for them entirely, not worth the round trip.
 export const isBotRoom = (roomId) => roomId.startsWith("bot-");
 
+export const STARTING_CLOCK_MS = 3 * 60 * 1000;
+const LOW_TIME_THRESHOLD_MS = 5000;
+const LOW_TIME_BONUS_MS = 5000;
+
 export function createGame() {
-  return { chess: new Chess(), moves: [], players: {}, result: null };
+  return {
+    chess: new Chess(),
+    moves: [],
+    players: {},
+    result: null,
+    clocks: { white: STARTING_CLOCK_MS, black: STARTING_CLOCK_MS },
+    // Clock only starts once both seats are actually filled (index.js sets
+    // clockStarted/turnStartedAt at that point) — a lone first player
+    // waiting for an opponent shouldn't burn their own clock. Bot games
+    // never start it (see applyMove/scheduleFlagTimer's isBotRoom guards).
+    turnStartedAt: null,
+    clockStarted: false
+  };
+}
+
+// Applies elapsed time (since turnStartedAt) to the side that just moved.
+// Pure function so it's the single source of truth for the flag-fall
+// condition/math, shared by applyMove (checked when a move arrives) and
+// index.js's proactive flag-fall timer (checked when nobody moves at all).
+//
+// Low-time rule: once a side's remaining time was already below 5 seconds
+// *before* this tick, completing the move in time adds 5 seconds on top of
+// whatever remains — not a flat reset.
+export function tickClock(clocks, colorToMove, turnStartedAt, now) {
+  const elapsed = now - turnStartedAt;
+  const remainingBefore = clocks[colorToMove];
+  const remainingAfterElapsed = remainingBefore - elapsed;
+  if (remainingAfterElapsed <= 0) {
+    return { clocks: { ...clocks, [colorToMove]: 0 }, flagFall: true };
+  }
+  const bonus = remainingBefore < LOW_TIME_THRESHOLD_MS ? LOW_TIME_BONUS_MS : 0;
+  return { clocks: { ...clocks, [colorToMove]: remainingAfterElapsed + bonus }, flagFall: false };
 }
 
 export function serialize(game) {
@@ -19,7 +54,13 @@ export function serialize(game) {
     moves: game.moves.map((m) => m.san),
     lastMove: last ? { from: last.from, to: last.to } : null, // for the frontend's last-move highlight
     players: game.players, // Include player connection status
-    result: game.result // null while the game is ongoing; { reason, winner, resignedBy } once someone resigns
+    result: game.result, // null while ongoing; { reason, winner, resignedBy } on resignation, { reason: "flagfall", winner, loser } on flag-fall
+    // clocks: remaining ms per side as of turnStartedAt (frozen for whoever
+    // isn't on the move). Frontend renders a local countdown for the side to
+    // move between these resync points instead of the server ticking every
+    // second, per docs/SCOPE.md's explicit design call on this item.
+    clocks: game.clockStarted ? game.clocks : null,
+    turnStartedAt: game.clockStarted ? game.turnStartedAt : null
   };
 }
 
@@ -39,14 +80,31 @@ export function serialize(game) {
 //
 // Any dep may be omitted (defaults to a no-op), which is what lets tests
 // exercise just the parts they care about.
-export function applyMove(game, roomId, { from, to, promotion }, deps = {}) {
+export function applyMove(game, roomId, { from, to, promotion }, deps = {}, now = Date.now()) {
   const { emit, publish, saveGame } = deps;
 
-  if (game.result) throw new Error("game is already over");
+  if (game.result || game.chess.isGameOver()) throw new Error("game is already over");
+
+  // Bot games never start the clock (see createGame) — no point racing a
+  // human against Stockfish's own thinking time.
+  if (game.clockStarted && !isBotRoom(roomId)) {
+    const colorToMove = game.chess.turn() === "w" ? "white" : "black";
+    const { clocks, flagFall } = tickClock(game.clocks, colorToMove, game.turnStartedAt, now);
+    game.clocks = clocks;
+    if (flagFall) {
+      const winner = colorToMove === "white" ? "black" : "white";
+      game.result = { reason: "flagfall", winner, loser: colorToMove };
+      if (emit) emit(roomId, "game-state", serialize(game));
+      if (saveGame) Promise.resolve(saveGame(roomId, game)).catch((e) => console.error("save game failed", e));
+      throw new Error("flag fell");
+    }
+  }
+
   const move = game.chess.move({ from, to, promotion: promotion || "q" });
   if (!move) throw new Error("illegal move");
 
-  game.moves.push({ san: move.san, from, to, fen: game.chess.fen(), ts: Date.now() });
+  game.moves.push({ san: move.san, from, to, fen: game.chess.fen(), ts: now });
+  game.turnStartedAt = now;
 
   if (emit) emit(roomId, "game-state", serialize(game));
 
